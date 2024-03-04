@@ -1,0 +1,213 @@
+
+    model {
+                                                                
+    ##############
+    ### PRIORS ###
+    ##############
+    
+    # Prior For Zero-Inflation
+    
+      for(m in 1:30){
+        
+        theta.z[m] ~ dlogis(0,1)
+      
+      }
+    
+    
+    # Abundance Overdispersion Parameter Priors
+
+    for(m in 1:30){
+        for(k in 1:3){
+          for(i in 1:9){
+      
+            eps.abund[m,k,i] ~ dnorm(0, tau.abund)
+          
+          }
+        }
+      }
+      
+    tau.abund <- 1/sd.abund^2
+    sd.abund ~ dunif(0,3)
+
+
+   # Detection Overdispersion Parameter Priors
+    
+      for(m in 1:30){
+        for(k in 1:3){
+          for(i in 1:9){
+          
+            tau.p[m,k,i] <- pow(sd.p[m,k,i], -2)
+            sd.p[m,k,i] ~ dunif(0, 3)
+          
+          }
+        }
+      }
+
+      
+      
+    # Random Intercepts For Each Site
+    
+      for(i in 1:9){  
+      
+        b.site[i] ~ dnorm(mu.site, tau.site)
+        p.site[i] ~ dnorm(mu.site.p, tau.site.p)
+      
+      }
+  
+      mu.site ~ dnorm(0,0.01)
+      tau.site <- 1/sigma.site^2
+      sigma.site ~ dunif(0,5)
+      
+      mu.site.p ~ dnorm(0,0.01)
+      tau.site.p <- 1/sigma.site.p^2
+      sigma.site.p ~ dunif(0,5)
+    
+  
+    # Abundance Covariate Priors
+    
+      b.mast ~ dnorm(0,0.01)
+      b.summerprecip ~ dnorm(0,0.01)        
+      b.tmin ~ dnorm(0,0.01)
+      b.hdays ~ dnorm(0,0.01)
+      b.rsd ~ dnorm(0,0.01)
+      b.herbs ~ dnorm(0,0.01)
+    
+    
+    ## Detection Probability Covariate Priors
+    
+      p.temp ~ dlogis(0,1)
+      p.precip ~ dlogis(0,1)
+      p.jday ~ dlogis(0,1)
+    
+    ##################
+    ### LIKELIHOOD ###
+    ##################
+    
+    # ECOLOGICAL SUBMODEL FOR TRUE ABUNDANCE
+      for(m in 1:30){ 
+      
+        zero[m] ~ dbern(pro[m])                 
+    
+        logit(pro[m]) <- theta.z[m]
+    
+        for(k in 1:3){                                       
+          for(i in 1:9){                                     
+     
+           N[m,k,i] ~ dpois(muzero[m,k,i])
+    
+           muzero[m,k,i] <- lambda[m,k,i] * zero[m] + 1e-10  
+    
+           log(lambda[m,k,i]) <- b.site[site[i]] +                         # random intercept by site                  
+                                 b.mast * mast[m] +                        # beech mast
+                                 b.summerprecip * summerprecip[m,k] +      # cummulative summer precip 
+                                 b.tmin * tmin[m] +                        # winter temp
+                                 b.hdays * hdays[m] +                      # winter snow depth
+                                 b.rsd * rsd[m,i] +                        # relative stand density 
+                                 b.herbs * herbs[m,i] +                    # herbaceous cover  
+                                 lgTrapNumber[i] +                         # site trap number offset
+                                 eps.abund[m,k,i]                          # abundance overdispersion random effect
+                                 
+            } # i
+          } # k 
+    
+      # YEARLY TOTAL ACROSS ALL SITES AND TRAP SESSIONS
+
+        yearlyN[m] <- mean(N[m,,1:sitesVec[m]])
+    
+        } # m 
+                                 
+    # OBSERVATION SUBMODEL FOR DETECTION    
+      for(m in 1:30){
+        for(k in 1:3){
+          for(i in 1:9){
+          
+          fac[m,k,i,1] <- 0                                   
+          y[m,k,i,1] ~ dbin(det.p[m,k,i,1], 
+                            N[m,k,i] - fac[m,k,i,1])   
+                            
+          logit(det.p[m,k,i,1]) <- lp[m,k,i,1]
+          
+          mu.lp[m,k,i,1] <- p.site[site[i]] +
+                            p.temp * temp[m,k,1] +                  
+                            p.precip * precip[m,k,1] +    
+                            p.jday * jday[m,k,1] +         
+                            lgTrapNumber[i] 
+
+          lp[m,k,i,1] ~ dnorm(mu.lp[m,k,i,1], tau.p[m,k,i])
+          
+          for (j in 2:10){
+          
+            fac[m,k,i,j] <- fac[m,k,i,j-1] +                    
+                            y[m,k,i,j-1]              
+            
+            y[m,k,i,j] ~ dbin(det.p[m,k,i,j], 
+                              N[m,k,i] - fac[m,k,i,j])
+                              
+            logit(det.p[m,k,i,j]) <- lp[m,k,i,j]
+            
+            mu.lp[m,k,i,j] <- p.site[site[i]] +                                 
+                              p.temp * temp[m,k,j] +                  
+                              p.precip * precip[m,k,j] +    
+                              p.jday * jday[m,k,j] +        
+                              lgTrapNumber[i] 
+                              
+            lp[m,k,i,j] ~ dnorm(mu.lp[m,k,i,j], tau.p[m,k,i])
+              
+          } # j
+        } # i
+      } # k
+    } # m
+    
+    # CALCULATE FIT STATISTICS
+    
+    for(m in 1:30){
+      for(k in 1:3){
+        for(i in 1:9){
+        
+        fac2[m,k,i,1] <- 0
+        
+        for(j in 1:1){
+        
+    # COMPUTE FIT STATISTIC FOR OBSERVED DATA
+  
+          count.hat[m,k,i,j] <- round((N[m,k,i] - fac2[m,k,i,j]) * det.p[m,k,i,j]) 
+          E.obs[m,k,i,j] <- pow((y[m,k,i,j] - count.hat[m,k,i,j]), 2) / (count.hat[m,k,i,j] + 0.5)
+  
+    # GENERATE REPLICATE DATA AND COMPUTE FIT STATISTIC FOR THEM
+  
+          count.new[m,k,i,j] ~ dbin(det.p[m,k,i,j], N[m,k,i] - fac2[m,k,i,j])
+          E.new[m,k,i,j] <- pow((count.new[m,k,i,j] - count.hat[m,k,i,j]),2) / (count.hat[m,k,i,j] + 0.5)
+  
+  
+        } # j
+        
+        for(j in 2:10){
+        
+          fac2[m,k,i,j] <- fac2[m,k,i,j-1] + count.hat[m,k,i,j-1]
+        
+    # COMPUTE FIT STATISTICS FOR OBSERVED DATA
+  
+          count.hat[m,k,i,j] <- round((N[m,k,i] - fac2[m,k,i,j]) * det.p[m,k,i,j]) 
+          E.obs[m,k,i,j] <- pow((y[m,k,i,j] - count.hat[m,k,i,j]), 2) / (count.hat[m,k,i,j] + 0.5)
+  
+    # GENERATE REPLICATE DATA AND COMPUTE FIT STATISTICS FOR THEM
+  
+          count.new[m,k,i,j] ~ dbin(det.p[m,k,i,j], N[m,k,i] - fac2[m,k,i,j])
+          E.new[m,k,i,j] <- pow((count.new[m,k,i,j] - count.hat[m,k,i,j]),2) / (count.hat[m,k,i,j] + 0.5)
+        
+          } # j
+        } # i
+      } # k
+    } # m
+  
+  # BAYESIAN P-VALUE CALCULATION
+      
+    fit.obs <- sum(E.obs[,,,])
+    fit.new <- sum(E.new[,,,])
+    
+    b.pvalue <- mean(fit.new > fit.obs)           # Calculate Bayesian p-value
+    
+    
+    
+  }#END
+
